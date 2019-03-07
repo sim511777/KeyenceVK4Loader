@@ -51,6 +51,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.IO.Compression;
 
 namespace InspPc {
     public class KeyenceHeader {
@@ -255,25 +256,63 @@ namespace InspPc {
         private const int KEYENCE_LINE_MEASUREMENT_SIZE = 18440;
 
         public static KeyenceFile Load(string filename) {
+            string ext = Path.GetExtension(filename).ToLower();
+            if (ext == ".vk4") {
+                return LoadVk4File(filename);
+            } else if (ext == ".vk6") {
+                return LoadVk6File(filename);
+            } else {
+                throw new Exception("Invalid extension for keyence vk4, vk6 file");
+            }
+        }
+
+        public static KeyenceFile LoadVk4File(string filename) {
             byte[] buf = File.ReadAllBytes(filename);
-            MemoryStream ms = new MemoryStream(buf);
-            BinaryReader p = new BinaryReader(ms);
+            using (MemoryStream vk4Stream = new MemoryStream(buf)) {
+                return KeyenceLoader.LoadVk4FromStream(vk4Stream);
+            }
+        }
 
-            KeyenceFile kfile = new KeyenceFile();
+        public static KeyenceFile LoadVk6File(string filename) {
+            byte[] buff = File.ReadAllBytes(filename);
+            int zipOffset = 0;
+            using (var vk6Steam = new MemoryStream(buff)) {
+                Vk6.ThrowIfInvalidFileSignature(vk6Steam);
+                zipOffset = Vk6.SkipThumbnailBlock(vk6Steam);
+            }
 
-            kfile.header = read_header(p);
-            kfile.offset_table = read_offset_table(p);
-            kfile.meas_conds = read_meas_conds(p);
-            read_assembly_info(kfile, p);
-            read_data_images(kfile, p);
-            read_color_images(kfile, p);
-            read_line_meas(kfile, p);
-            read_character_strs(kfile, p);
+            using (var zipStream = new MemoryStream(buff, zipOffset, buff.Length - zipOffset)) {
+                using (var za = new ZipArchive(zipStream)) {
+                    var zeVk4 = za.Entries.First(ze => ze.FullName == "Vk4File");
+                    using (var vk4Stream = zeVk4.Open()) {
+                        using (var vk4StreamCopy = new MemoryStream()) {
+                            vk4Stream.CopyTo(vk4StreamCopy);
+                            vk4StreamCopy.Seek(0, SeekOrigin.Begin);
+                            return LoadVk4FromStream(vk4StreamCopy);
+                        }
+                    }
+                }
+            }
+        }
 
-            if (kfile.nimages == 0)
-                throw new Exception("ni image data");
+        public static KeyenceFile LoadVk4FromStream(Stream stream) {
+            using (BinaryReader p = new BinaryReader(stream)) {
+                KeyenceFile kfile = new KeyenceFile();
 
-            return kfile;
+                kfile.header = read_header(p);
+                kfile.offset_table = read_offset_table(p);
+                kfile.meas_conds = read_meas_conds(p);
+                read_assembly_info(kfile, p);
+                read_data_images(kfile, p);
+                read_color_images(kfile, p);
+                read_line_meas(kfile, p);
+                read_character_strs(kfile, p);
+
+                if (kfile.nimages == 0)
+                    throw new Exception("ni image data");
+
+                return kfile;
+            }
         }
 
         private static void CheckCanReadSize(BinaryReader p, int size) {
@@ -660,6 +699,34 @@ namespace InspPc {
             charstrs = kfile.char_strs = new KeyenceCharacterStrings();
             charstrs.title = read_character_str(p, ref remsize);
             charstrs.lens_name = read_character_str(p, ref remsize);
+        }
+    }
+
+    class Vk6 {
+        private static byte[] GetSignatureBytes() {
+            return Encoding.ASCII.GetBytes("VK6");
+        }
+
+        public static bool VerifySignature(Stream sourceStream) {
+            byte[] signatureBytes = GetSignatureBytes();
+            byte[] buffer = new byte[signatureBytes.Length];
+            if (sourceStream.Read(buffer, 0, buffer.Length) != buffer.Length)
+                return false;
+            return ((IEnumerable<byte>)buffer).SequenceEqual<byte>((IEnumerable<byte>)signatureBytes);
+        }
+
+        public static void ThrowIfInvalidFileSignature(Stream stream) {
+            if (!VerifySignature(stream))
+                throw new Exception("Broken file.(Bad signature)");
+        }
+
+        public static int SkipThumbnailBlock(Stream stream) {
+            byte[] buffer = new byte[4];
+            if (stream.Read(buffer, 0, buffer.Length) != buffer.Length)
+                throw new Exception("Broken file.(Bad thumbnail block)");
+            int int32 = BitConverter.ToInt32(buffer, 0);
+            stream.Seek((long)int32, SeekOrigin.Current);
+            return (int)stream.Position;
         }
     }
 }
