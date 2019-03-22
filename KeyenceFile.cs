@@ -703,29 +703,27 @@ namespace InspPc {
     }
 
     class Vk6 {
-        private static byte[] GetSignatureBytes() {
-            return Encoding.ASCII.GetBytes("VK6");
-        }
-
-        public static bool VerifySignature(Stream sourceStream) {
-            byte[] signatureBytes = GetSignatureBytes();
-            byte[] buffer = new byte[signatureBytes.Length];
-            if (sourceStream.Read(buffer, 0, buffer.Length) != buffer.Length)
-                return false;
-            return ((IEnumerable<byte>)buffer).SequenceEqual<byte>((IEnumerable<byte>)signatureBytes);
-        }
-
-        public static void ThrowIfInvalidFileSignature(Stream stream) {
-            if (!VerifySignature(stream))
+        // 파일 시그네쳐 체크
+        public static void ThrowIfInvalidFileSignature(Stream sourceStream) {
+            byte[] sign = Encoding.ASCII.GetBytes("VK6");
+            byte[] signRead = new byte[sign.Length];
+            int signReadBytes = sourceStream.Read(signRead, 0, signRead.Length);
+            
+            if (signReadBytes != signRead.Length || signRead.SequenceEqual(sign) == false)
                 throw new Exception("Broken file.(Bad signature)");
         }
 
+        // 썸네일 데이터 만큼 스킵
         public static int SkipThumbnailBlock(Stream stream) {
-            byte[] buffer = new byte[4];
-            if (stream.Read(buffer, 0, buffer.Length) != buffer.Length)
+            byte[] thumbSizeRead = new byte[4];
+            int thumbSizeReadBytes = stream.Read(thumbSizeRead, 0, thumbSizeRead.Length);
+            
+            if (thumbSizeReadBytes != thumbSizeRead.Length)
                 throw new Exception("Broken file.(Bad thumbnail block)");
-            int int32 = BitConverter.ToInt32(buffer, 0);
-            stream.Seek((long)int32, SeekOrigin.Current);
+
+            int thumbBytes = BitConverter.ToInt32(thumbSizeRead, 0);
+            stream.Seek(thumbBytes, SeekOrigin.Current);
+            
             return (int)stream.Position;
         }
     }
